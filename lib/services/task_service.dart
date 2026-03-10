@@ -14,6 +14,9 @@ class TaskService {
     }
   }
 
+  String _assignmentId(String taskId, String volunteerId) =>
+      '${taskId}_$volunteerId';
+
   // ── CREATE TASK ───────────────────────────────────────────────
   Future<String> createTask({
     required String title,
@@ -229,8 +232,28 @@ class TaskService {
             snap.docs.map((d) => TaskModel.fromMap(d.data(), d.id)).toList());
   }
 
-  /// Tasks where the volunteer has a pending invite.
-  Stream<List<TaskModel>> streamVolunteerInvites(String volunteerId) {
+  /// Tasks the volunteer can respond to: all 'inviting' tasks in their NGO
+  /// that they haven't already joined or declined.
+  Stream<List<TaskModel>> streamVolunteerInvites(
+    String volunteerId, {
+    String? ngoId,
+  }) {
+    // When we know the NGO, show every open invitation for that NGO
+    // so newly-joined volunteers see existing tasks.
+    if (ngoId != null && ngoId.isNotEmpty) {
+      return _db
+          .collection('tasks')
+          .where('ngoId', isEqualTo: ngoId)
+          .where('status', isEqualTo: 'inviting')
+          .snapshots()
+          .map((snap) => snap.docs
+              .map((d) => TaskModel.fromMap(d.data(), d.id))
+              .where((t) =>
+                  !t.assignedVolunteers.contains(volunteerId) &&
+                  !t.declinedBy.contains(volunteerId))
+              .toList());
+    }
+    // Fallback: only explicitly invited tasks.
     return _db
         .collection('tasks')
         .where('pendingInvites', arrayContains: volunteerId)
@@ -244,15 +267,12 @@ class TaskService {
     String taskId,
     String volunteerId,
   ) async {
-    final snap = await _db
+    final doc = await _db
         .collection('task_assignments')
-        .where('taskId', isEqualTo: taskId)
-        .where('volunteerId', isEqualTo: volunteerId)
-        .limit(1)
+        .doc(_assignmentId(taskId, volunteerId))
         .get();
-    if (snap.docs.isEmpty) return null;
-    return TaskAssignmentModel.fromMap(
-        snap.docs.first.data(), snap.docs.first.id);
+    if (!doc.exists) return null;
+    return TaskAssignmentModel.fromMap(doc.data()!, doc.id);
   }
 
   /// Stream the volunteer's assignment for a specific task.
@@ -262,14 +282,11 @@ class TaskService {
   ) {
     return _db
         .collection('task_assignments')
-        .where('taskId', isEqualTo: taskId)
-        .where('volunteerId', isEqualTo: volunteerId)
-        .limit(1)
+        .doc(_assignmentId(taskId, volunteerId))
         .snapshots()
-        .map((snap) {
-      if (snap.docs.isEmpty) return null;
-      return TaskAssignmentModel.fromMap(
-          snap.docs.first.data(), snap.docs.first.id);
+        .map((doc) {
+      if (!doc.exists) return null;
+      return TaskAssignmentModel.fromMap(doc.data()!, doc.id);
     });
   }
 
@@ -278,34 +295,46 @@ class TaskService {
   /// Volunteer accepts an invitation: move from pendingInvites → assignedVolunteers
   /// and create a task_assignment document.
   Future<void> acceptInvite(String taskId, String volunteerId) async {
-    final batch = _db.batch();
-
-    // Move volunteer from pendingInvites to assignedVolunteers
     final taskRef = _db.collection('tasks').doc(taskId);
-    batch.update(taskRef, {
-      'pendingInvites': FieldValue.arrayRemove([volunteerId]),
-      'assignedVolunteers': FieldValue.arrayUnion([volunteerId]),
-    });
+    final assignRef =
+        _db.collection('task_assignments').doc(_assignmentId(taskId, volunteerId));
 
-    // Create a task_assignment
-    final assignRef = _db.collection('task_assignments').doc();
-    batch.set(assignRef, {
-      'taskId': taskId,
-      'volunteerId': volunteerId,
-      'individualProgress': 0.0,
-    });
+    await _db.runTransaction((tx) async {
+      final taskDoc = await tx.get(taskRef);
+      if (!taskDoc.exists) throw Exception('Task not found.');
 
-    await batch.commit();
-
-    // Only auto-activate if ALL required volunteer slots are filled
-    final taskDoc = await taskRef.get();
-    if (taskDoc.exists) {
       final task = TaskModel.fromMap(taskDoc.data()!, taskDoc.id);
-      if (task.status == 'inviting' &&
-          task.assignedVolunteers.length >= task.maxVolunteers) {
-        await taskRef.update({'status': 'active'});
+      final isAlreadyAssigned = task.assignedVolunteers.contains(volunteerId);
+      final currentAssignedCount = task.assignedVolunteers.length;
+
+      if (!isAlreadyAssigned && currentAssignedCount >= task.maxVolunteers) {
+        throw Exception('Task is full.');
       }
-    }
+      if (task.status == 'completed') {
+        throw Exception('Task is already completed.');
+      }
+
+      final updates = <String, dynamic>{
+        'pendingInvites': FieldValue.arrayRemove([volunteerId]),
+      };
+
+      if (!isAlreadyAssigned) {
+        updates['assignedVolunteers'] = FieldValue.arrayUnion([volunteerId]);
+      }
+
+      final assignedCountAfter =
+          isAlreadyAssigned ? currentAssignedCount : currentAssignedCount + 1;
+      if (task.status == 'inviting' && assignedCountAfter >= task.maxVolunteers) {
+        updates['status'] = 'active';
+      }
+
+      tx.update(taskRef, updates);
+      tx.set(assignRef, {
+        'taskId': taskId,
+        'volunteerId': volunteerId,
+        'individualProgress': 0.0,
+      }, SetOptions(merge: true));
+    });
   }
 
   /// Volunteer declines an invitation.
@@ -320,46 +349,44 @@ class TaskService {
 
   /// Volunteer joins a task directly (not through invitation).
   Future<void> joinTask(String taskId, String volunteerId) async {
-    final taskDoc = await _db.collection('tasks').doc(taskId).get();
-    if (!taskDoc.exists) throw Exception('Task not found.');
-    final task = TaskModel.fromMap(taskDoc.data()!, taskDoc.id);
-
-    if (task.assignedVolunteers.contains(volunteerId)) {
-      throw Exception('Already assigned to this task.');
-    }
-    if (task.assignedVolunteers.length >= task.maxVolunteers) {
-      throw Exception('Task is full.');
-    }
-    if (task.status == 'completed') {
-      throw Exception('Task is already completed.');
-    }
-
-    final batch = _db.batch();
     final taskRef = _db.collection('tasks').doc(taskId);
-    batch.update(taskRef, {
-      'assignedVolunteers': FieldValue.arrayUnion([volunteerId]),
-      'pendingInvites': FieldValue.arrayRemove([volunteerId]),
-      'declinedBy': FieldValue.arrayRemove([volunteerId]),
-    });
+    final assignRef =
+        _db.collection('task_assignments').doc(_assignmentId(taskId, volunteerId));
 
-    final assignRef = _db.collection('task_assignments').doc();
-    batch.set(assignRef, {
-      'taskId': taskId,
-      'volunteerId': volunteerId,
-      'individualProgress': 0.0,
-    });
+    await _db.runTransaction((tx) async {
+      final taskDoc = await tx.get(taskRef);
+      if (!taskDoc.exists) throw Exception('Task not found.');
 
-    await batch.commit();
-
-    // Only auto-activate if ALL required volunteer slots are filled
-    final updatedDoc = await taskRef.get();
-    if (updatedDoc.exists) {
-      final updatedTask = TaskModel.fromMap(updatedDoc.data()!, updatedDoc.id);
-      if (updatedTask.status == 'inviting' &&
-          updatedTask.assignedVolunteers.length >= updatedTask.maxVolunteers) {
-        await taskRef.update({'status': 'active'});
+      final task = TaskModel.fromMap(taskDoc.data()!, taskDoc.id);
+      final isAlreadyAssigned = task.assignedVolunteers.contains(volunteerId);
+      if (isAlreadyAssigned) {
+        throw Exception('Already assigned to this task.');
       }
-    }
+      if (task.assignedVolunteers.length >= task.maxVolunteers) {
+        throw Exception('Task is full.');
+      }
+      if (task.status == 'completed') {
+        throw Exception('Task is already completed.');
+      }
+
+      final updates = <String, dynamic>{
+        'assignedVolunteers': FieldValue.arrayUnion([volunteerId]),
+        'pendingInvites': FieldValue.arrayRemove([volunteerId]),
+        'declinedBy': FieldValue.arrayRemove([volunteerId]),
+      };
+
+      final assignedCountAfter = task.assignedVolunteers.length + 1;
+      if (task.status == 'inviting' && assignedCountAfter >= task.maxVolunteers) {
+        updates['status'] = 'active';
+      }
+
+      tx.update(taskRef, updates);
+      tx.set(assignRef, {
+        'taskId': taskId,
+        'volunteerId': volunteerId,
+        'individualProgress': 0.0,
+      }, SetOptions(merge: true));
+    });
   }
 
   /// Volunteer dismisses a task they're not interested in.

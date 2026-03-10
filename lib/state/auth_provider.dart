@@ -37,6 +37,6 @@ final userStreamProvider = StreamProvider<UserModel?>((ref) {
       return ref.read(userServiceProvider).streamUser(user.uid);
     },
     loading: () => Stream.value(null),
-    error: (e, st) => Stream.value(null),
+    error: (e, st) => Stream.error(e, st),
   );
 });

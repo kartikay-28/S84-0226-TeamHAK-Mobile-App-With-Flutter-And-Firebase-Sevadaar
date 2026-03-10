@@ -109,7 +109,8 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   }
 
   Widget _buildBody(TaskModel task) {
-    final urgency = taskUrgencyColor(task.createdAt, task.deadline);
+    final isCompleted = task.status == 'completed';
+    final urgency = isCompleted ? _C.green : taskUrgencyColor(task.createdAt, task.deadline);
 
     return SafeArea(
       child: Column(
@@ -561,11 +562,12 @@ class _ProgressHeroCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isCompleted = task.status == 'completed';
     final now = DateTime.now();
     final total = task.deadline.difference(task.createdAt).inMinutes;
     final remaining = task.deadline.difference(now).inMinutes;
     final pct = total > 0 ? (remaining / total) * 100 : 0.0;
-    final timeLabel = pct > 50 ? 'ON TRACK' : (pct > 30 ? 'CAUTION' : 'URGENT');
+    final timeLabel = isCompleted ? 'COMPLETED' : (pct > 50 ? 'ON TRACK' : (pct > 30 ? 'CAUTION' : 'URGENT'));
 
     // Hero card uses dark navy theme like SA dashboard hero
     return Container(
@@ -612,16 +614,19 @@ class _ProgressHeroCard extends StatelessWidget {
                       Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            '${task.mainProgress.toStringAsFixed(0)}%',
-                            style: GoogleFonts.dmSans(
-                              color: urgency,
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
+                          if (isCompleted)
+                            Icon(Icons.check_circle_rounded, color: urgency, size: 32)
+                          else
+                            Text(
+                              '${task.mainProgress.toStringAsFixed(0)}%',
+                              style: GoogleFonts.dmSans(
+                                color: urgency,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
-                          ),
                           Text(
-                            'done',
+                            isCompleted ? 'Completed' : 'done',
                             style: GoogleFonts.dmSans(
                               color: urgency.withValues(alpha: 0.6),
                               fontSize: 10,
@@ -699,9 +704,11 @@ class _ProgressHeroCard extends StatelessWidget {
                 ),
                 const Spacer(),
                 Text(
-                  remaining > 0
-                      ? '${(remaining / 60).floor()}h ${remaining % 60}m left'
-                      : 'Overdue',
+                  isCompleted
+                      ? 'Task finished'
+                      : (remaining > 0
+                          ? '${(remaining / 60).floor()}h ${remaining % 60}m left'
+                          : 'Overdue'),
                   style: GoogleFonts.dmSans(
                     color: urgency.withValues(alpha: 0.7),
                     fontSize: 12,
