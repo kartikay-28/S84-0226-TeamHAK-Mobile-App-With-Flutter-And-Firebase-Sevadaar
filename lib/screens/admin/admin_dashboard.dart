@@ -1000,7 +1000,8 @@ class _TaskCardState extends State<_TaskCard> {
   @override
   Widget build(BuildContext context) {
     final task = widget.task;
-    final urgency = taskUrgencyColor(task.createdAt, task.deadline);
+    final isCompleted = task.status == 'completed';
+    final urgency = isCompleted ? _C.green : taskUrgencyColor(task.createdAt, task.deadline);
     final isExpiredInviting = task.status == 'inviting' &&
         DateTime.now().isAfter(task.inviteDeadline);
     final (String chipLabel, Color chipColor) = isExpiredInviting
@@ -1047,11 +1048,11 @@ class _TaskCardState extends State<_TaskCard> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Urgency strip
+                // Urgency strip — green for completed
                 Container(
                   width: 4,
                   decoration: BoxDecoration(
-                    color: isExpiredInviting ? _C.orange : urgency,
+                    color: isCompleted ? _C.green : (isExpiredInviting ? _C.orange : urgency),
                     borderRadius: const BorderRadius.only(
                       topLeft: Radius.circular(20),
                       bottomLeft: Radius.circular(20),
@@ -1095,6 +1096,22 @@ class _TaskCardState extends State<_TaskCard> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 12),
+                        if (isCompleted)
+                          Row(
+                            children: [
+                              const Icon(Icons.check_circle_rounded, size: 18, color: _C.green),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Completed',
+                                style: GoogleFonts.dmSans(
+                                  color: _C.green,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          )
+                        else ...[
                         ClipRRect(
                           borderRadius: BorderRadius.circular(6),
                           child: LinearProgressIndicator(
@@ -1145,6 +1162,7 @@ class _TaskCardState extends State<_TaskCard> {
                             ),
                           ],
                         ),
+                        ],
                         // ── Invite timer / expired banner ──
                         if (task.status == 'inviting') ...[
                           const SizedBox(height: 8),

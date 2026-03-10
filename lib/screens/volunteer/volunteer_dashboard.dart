@@ -40,6 +40,17 @@ Color _urgencyColor(DateTime createdAt, DateTime deadline) {
   return _C.red;
 }
 
+const Duration _kNetworkTimeout = Duration(seconds: 20);
+
+Future<T> _withNetworkTimeout<T>(Future<T> operation) {
+  return operation.timeout(
+    _kNetworkTimeout,
+    onTimeout: () => throw Exception(
+      'Request timed out. Please check your connection and try again.',
+    ),
+  );
+}
+
 // ─── Root Dashboard ───────────────────────────────────────────────────────────
 class VolunteerDashboard extends StatefulWidget {
   const VolunteerDashboard({super.key});
@@ -57,6 +68,7 @@ class _VolunteerDashboardState extends State<VolunteerDashboard>
   UserModel? _currentUser;
   NgoModel? _currentNgo;
   bool _loadingUser = true;
+  String? _profileLoadError;
 
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
@@ -81,22 +93,31 @@ class _VolunteerDashboardState extends State<VolunteerDashboard>
   Future<void> _loadUser() async {
     try {
       final uid = _auth.currentUser?.uid ?? '';
+      if (uid.isEmpty) {
+        throw Exception('Session expired. Please sign in again.');
+      }
       final profile = await _auth.getUserProfile(uid);
       NgoModel? ngo;
       final ngoId = profile.ngoId;
       if (ngoId != null && ngoId.isNotEmpty) {
-        ngo = await _ngoService.getNgoById(ngoId);
+        ngo = await _withNetworkTimeout(_ngoService.getNgoById(ngoId));
       }
       if (mounted) {
         setState(() {
           _currentUser = profile;
           _currentNgo = ngo;
           _loadingUser = false;
+          _profileLoadError = null;
         });
         _fadeCtrl.forward();
       }
-    } catch (_) {
-      if (mounted) setState(() => _loadingUser = false);
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadingUser = false;
+          _profileLoadError = e.toString().replaceAll('Exception: ', '');
+        });
+      }
     }
   }
 
@@ -127,6 +148,7 @@ class _VolunteerDashboardState extends State<VolunteerDashboard>
               ? StreamBuilder<List<TaskModel>>(
                   stream: _taskService.streamVolunteerInvites(
                     _currentUser!.uid,
+                    ngoId: _currentUser!.ngoId,
                   ),
                   builder: (_, snap) => (snap.data ?? []).isNotEmpty
                       ? Container(
@@ -138,6 +160,30 @@ class _VolunteerDashboardState extends State<VolunteerDashboard>
                           ),
                         )
                       : const SizedBox.shrink(),
+                )
+              : null,
+          ngoTasksBadge: _currentUser != null &&
+                  _currentUser!.ngoId != null &&
+                  _currentUser!.ngoId!.isNotEmpty
+              ? StreamBuilder<List<TaskModel>>(
+                  stream: _taskService.streamNgoTasks(_currentUser!.ngoId!),
+                  builder: (_, snap) {
+                    final uid = _currentUser!.uid;
+                    final open = (snap.data ?? []).where((t) =>
+                        t.status == 'inviting' &&
+                        !t.assignedVolunteers.contains(uid) &&
+                        !t.declinedBy.contains(uid)).toList();
+                    return open.isNotEmpty
+                        ? Container(
+                            width: 7,
+                            height: 7,
+                            decoration: const BoxDecoration(
+                              color: _C.orange,
+                              shape: BoxShape.circle,
+                            ),
+                          )
+                        : const SizedBox.shrink();
+                  },
                 )
               : null,
           onTab: (i) {
@@ -154,9 +200,9 @@ class _VolunteerDashboardState extends State<VolunteerDashboard>
 
   Widget _buildBody() {
     if (_currentUser == null) {
-      return const _EmptyState(
+      return _EmptyState(
         icon: Icons.error_outline_rounded,
-        message: 'Could not load profile.',
+        message: _profileLoadError ?? 'Could not load profile.',
       );
     }
     switch (_selectedTab) {
@@ -206,10 +252,12 @@ class _BottomNav extends StatelessWidget {
   final int selected;
   final ValueChanged<int> onTab;
   final Widget? inviteBadge;
+  final Widget? ngoTasksBadge;
   const _BottomNav({
     required this.selected,
     required this.onTab,
     this.inviteBadge,
+    this.ngoTasksBadge,
   });
 
   @override
@@ -249,6 +297,7 @@ class _BottomNav extends StatelessWidget {
                 label: 'NGO Tasks',
                 selected: selected == 2,
                 onTap: () => onTab(2),
+                badge: ngoTasksBadge,
               ),
               _NavItem(
                 icon: Icons.logout_rounded,
@@ -915,7 +964,8 @@ class _TaskCardState extends State<_TaskCard> {
   @override
   Widget build(BuildContext context) {
     final task = widget.task;
-    final urgency = _urgencyColor(task.createdAt, task.deadline);
+    final isCompleted = task.status == 'completed';
+    final urgency = isCompleted ? _C.green : _urgencyColor(task.createdAt, task.deadline);
     final sd = _statusData(task.status);
 
     return GestureDetector(
@@ -953,11 +1003,11 @@ class _TaskCardState extends State<_TaskCard> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Urgency strip
+                // Urgency strip — green for completed
                 Container(
                   width: 4,
                   decoration: BoxDecoration(
-                    color: urgency,
+                    color: isCompleted ? _C.green : urgency,
                     borderRadius: const BorderRadius.only(
                       topLeft: Radius.circular(20),
                       bottomLeft: Radius.circular(20),
@@ -1001,6 +1051,22 @@ class _TaskCardState extends State<_TaskCard> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         const SizedBox(height: 12),
+                        if (isCompleted)
+                          Row(
+                            children: [
+                              const Icon(Icons.check_circle_rounded, size: 18, color: _C.green),
+                              const SizedBox(width: 6),
+                              Text(
+                                'Completed',
+                                style: GoogleFonts.dmSans(
+                                  color: _C.green,
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          )
+                        else ...[
                         ClipRRect(
                           borderRadius: BorderRadius.circular(6),
                           child: LinearProgressIndicator(
@@ -1051,6 +1117,7 @@ class _TaskCardState extends State<_TaskCard> {
                             ),
                           ],
                         ),
+                        ],
                         // Expanded details
                         AnimatedCrossFade(
                           firstChild: const SizedBox.shrink(),
@@ -1121,6 +1188,16 @@ class _ExpandedTaskDetails extends StatelessWidget {
           stream:
               taskService.streamVolunteerAssignment(task.taskId, volunteerId),
           builder: (context, assignSnap) {
+            if (assignSnap.hasError) {
+              return const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text(
+                  'Could not load your assignment progress.',
+                  style: TextStyle(color: _C.red, fontSize: 12),
+                ),
+              );
+            }
+
             final assignment = assignSnap.data;
             final myProgress = assignment?.individualProgress ?? 0.0;
 
@@ -1128,6 +1205,16 @@ class _ExpandedTaskDetails extends StatelessWidget {
               stream: taskService.streamVolunteerProgressRequests(
                   task.taskId, volunteerId),
               builder: (context, reqSnap) {
+                if (reqSnap.hasError) {
+                  return const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text(
+                      'Could not load your progress requests.',
+                      style: TextStyle(color: _C.red, fontSize: 12),
+                    ),
+                  );
+                }
+
                 final requests = reqSnap.data ?? [];
                 final pendingReq = requests
                     .where((r) => r.status == 'pending')
@@ -1468,7 +1555,7 @@ class _UpdateProgressButton extends StatelessWidget {
                       return;
                     }
                     try {
-                      await taskService.submitProgressRequest(
+                      await _withNetworkTimeout(taskService.submitProgressRequest(
                         taskId: task.taskId,
                         taskTitle: task.title,
                         volunteerId: volunteerId,
@@ -1476,7 +1563,7 @@ class _UpdateProgressButton extends StatelessWidget {
                         currentProgress: currentProgress,
                         requestedProgress: requested,
                         note: noteCtrl.text.trim(),
-                      );
+                      ));
                       if (ctx.mounted) Navigator.pop(ctx);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -1566,7 +1653,10 @@ class _InvitesTab extends StatelessWidget {
         ),
         Expanded(
           child: StreamBuilder<List<TaskModel>>(
-            stream: taskService.streamVolunteerInvites(currentUser.uid),
+            stream: taskService.streamVolunteerInvites(
+              currentUser.uid,
+              ngoId: currentUser.ngoId,
+            ),
             builder: (context, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(child: _PulseLoader());
@@ -1629,8 +1719,8 @@ class _InviteCardState extends State<_InviteCard> {
   Future<void> _accept() async {
     setState(() => _loading = true);
     try {
-      await widget.taskService
-          .acceptInvite(widget.task.taskId, widget.volunteerId);
+      await _withNetworkTimeout(widget.taskService
+          .acceptInvite(widget.task.taskId, widget.volunteerId));
       if (mounted) {
         _snack(context, 'Joined "${widget.task.title}"!', _C.green,
             Icons.check_circle_rounded);
@@ -1647,8 +1737,8 @@ class _InviteCardState extends State<_InviteCard> {
   Future<void> _decline() async {
     setState(() => _loading = true);
     try {
-      await widget.taskService
-          .declineInvite(widget.task.taskId, widget.volunteerId);
+      await _withNetworkTimeout(widget.taskService
+          .declineInvite(widget.task.taskId, widget.volunteerId));
       if (mounted) {
         _snack(context, 'Declined invitation.', _C.textSec,
             Icons.remove_circle_rounded);
@@ -2013,8 +2103,8 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
   Future<void> _join() async {
     setState(() => _loading = true);
     try {
-      await widget.taskService
-          .joinTask(widget.task.taskId, widget.volunteerId);
+      await _withNetworkTimeout(widget.taskService
+          .joinTask(widget.task.taskId, widget.volunteerId));
       if (mounted) {
         _snack(context, 'Joined "${widget.task.title}"!', _C.green,
             Icons.check_circle_rounded);
@@ -2032,8 +2122,8 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
   Future<void> _acceptInvite() async {
     setState(() => _loading = true);
     try {
-      await widget.taskService
-          .acceptInvite(widget.task.taskId, widget.volunteerId);
+      await _withNetworkTimeout(widget.taskService
+          .acceptInvite(widget.task.taskId, widget.volunteerId));
       if (mounted) {
         _snack(context, 'Accepted invite for "${widget.task.title}"!',
             _C.green, Icons.check_circle_rounded);
@@ -2050,8 +2140,8 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
   Future<void> _dismiss() async {
     setState(() => _loading = true);
     try {
-      await widget.taskService
-          .dismissTask(widget.task.taskId, widget.volunteerId);
+      await _withNetworkTimeout(widget.taskService
+          .dismissTask(widget.task.taskId, widget.volunteerId));
       if (mounted) {
         _snack(context, 'Task dismissed.', _C.textSec,
             Icons.remove_circle_rounded);
@@ -2068,8 +2158,8 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
   Future<void> _declineInvite() async {
     setState(() => _loading = true);
     try {
-      await widget.taskService
-          .declineInvite(widget.task.taskId, widget.volunteerId);
+      await _withNetworkTimeout(widget.taskService
+          .declineInvite(widget.task.taskId, widget.volunteerId));
       if (mounted) {
         _snack(context, 'Declined invitation.', _C.textSec,
             Icons.remove_circle_rounded);
@@ -2086,11 +2176,11 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
   @override
   Widget build(BuildContext context) {
     final task = widget.task;
-    final urgency = _urgencyColor(task.createdAt, task.deadline);
+    final isCompleted = task.status == 'completed';
+    final urgency = isCompleted ? _C.green : _urgencyColor(task.createdAt, task.deadline);
     final isAssigned = task.assignedVolunteers.contains(widget.volunteerId);
     final isPending = task.pendingInvites.contains(widget.volunteerId);
     final isDeclined = task.declinedBy.contains(widget.volunteerId);
-    final isCompleted = task.status == 'completed';
     final isFull =
         task.assignedVolunteers.length >= task.maxVolunteers && !isAssigned;
 
@@ -2128,23 +2218,16 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
           ),
         ],
       ),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Urgency strip
-            Container(
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(
+              color: isCompleted ? _C.green : urgency,
               width: 4,
-              decoration: BoxDecoration(
-                color: urgency,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(20),
-                  bottomLeft: Radius.circular(20),
-                ),
-              ),
             ),
-            Expanded(
-              child: Padding(
+          ),
+        ),
+        child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2181,6 +2264,22 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
                         overflow: TextOverflow.ellipsis,
                       ),
                     const SizedBox(height: 12),
+                    if (isCompleted)
+                      Row(
+                        children: [
+                          const Icon(Icons.check_circle_rounded, size: 18, color: _C.green),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Completed',
+                            style: GoogleFonts.dmSans(
+                              color: _C.green,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      )
+                    else ...[
                     ClipRRect(
                       borderRadius: BorderRadius.circular(6),
                       child: LinearProgressIndicator(
@@ -2225,6 +2324,7 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
                         ),
                       ],
                     ),
+                    ],
                     // ── Action buttons ──
                     _buildActions(
                       isAssigned: isAssigned,
@@ -2236,9 +2336,6 @@ class _NgoTaskCardState extends State<_NgoTaskCard> {
                   ],
                 ),
               ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -2463,12 +2560,16 @@ class _OutlineActionBtnState extends State<_OutlineActionBtn> {
               children: [
                 Icon(widget.icon, color: widget.color, size: 15),
                 const SizedBox(width: 6),
-                Text(
-                  widget.label,
-                  style: GoogleFonts.dmSans(
-                    color: widget.color,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    style: GoogleFonts.dmSans(
+                      color: widget.color,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
@@ -2524,12 +2625,16 @@ class _FilledActionBtnState extends State<_FilledActionBtn> {
               children: [
                 Icon(widget.icon, color: Colors.white, size: 15),
                 const SizedBox(width: 6),
-                Text(
-                  widget.label,
-                  style: GoogleFonts.dmSans(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    style: GoogleFonts.dmSans(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
