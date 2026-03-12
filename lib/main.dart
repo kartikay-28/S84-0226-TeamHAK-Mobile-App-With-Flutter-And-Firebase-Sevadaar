@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/foundation.dart';
 import 'firebase_options.dart';
 import 'screens/splash/splash_screen.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +18,13 @@ void main() async {
   if (defaultTargetPlatform != TargetPlatform.linux &&
       defaultTargetPlatform != TargetPlatform.windows) {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+    // Register background message handler
+    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+    // Initialize notification service (permissions, channel, listeners)
+    final notificationService = NotificationService();
+    await notificationService.initialize();
   }
   
   SystemChrome.setSystemUIOverlayStyle(

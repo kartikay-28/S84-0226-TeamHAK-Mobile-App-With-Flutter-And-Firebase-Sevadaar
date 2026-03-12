@@ -64,4 +64,9 @@ class UserService {
   /// Demote an Admin back to Volunteer.
   Future<void> demoteToVolunteer(String uid) async =>
       await _db.collection('users').doc(uid).update({'role': 'volunteer'});
+
+  /// Save or update the FCM token for push notifications.
+  Future<void> saveFcmToken(String uid, String token) async {
+    await _db.collection('users').doc(uid).update({'fcmToken': token});
+  }
 }
