@@ -124,6 +124,31 @@ class NotificationService {
     onNotificationTapped?.call(message);
   }
 
+  /// Show a local notification from Firestore notification data (no FCM needed).
+  Future<void> showNotificationFromData({
+    required String title,
+    required String body,
+    required Map<String, String> data,
+  }) async {
+    await _localNotifications.show(
+      DateTime.now().millisecondsSinceEpoch.remainder(100000),
+      title,
+      body,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          sevadaarChannel.id,
+          sevadaarChannel.name,
+          channelDescription: sevadaarChannel.description,
+          importance: Importance.high,
+          priority: Priority.high,
+          playSound: true,
+          icon: '@mipmap/ic_launcher',
+        ),
+      ),
+      payload: jsonEncode(data),
+    );
+  }
+
   /// Get the current FCM registration token.
   Future<String?> getToken() async {
     final token = await _messaging.getToken();

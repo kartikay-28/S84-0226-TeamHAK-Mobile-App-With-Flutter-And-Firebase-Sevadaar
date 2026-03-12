@@ -3,6 +3,7 @@ import '../models/task_model.dart';
 import '../models/task_assignment_model.dart';
 import '../models/progress_request_model.dart';
 import '../models/user_model.dart';
+import 'firestore_notification_service.dart';
 
 class TaskService {
   FirebaseFirestore? _dbInstance;
@@ -13,6 +14,9 @@ class TaskService {
       throw Exception('Firebase not initialized.');
     }
   }
+
+  final FirestoreNotificationService _notifService =
+      FirestoreNotificationService();
 
   String _assignmentId(String taskId, String volunteerId) =>
       '${taskId}_$volunteerId';
@@ -43,6 +47,15 @@ class TaskService {
       'inviteDeadline': Timestamp.fromDate(DateTime.now().add(const Duration(hours: 24))),
       'adminFinalNote': '',
     });
+
+    // Notify all volunteers in the NGO about the new task
+    await _notifService.notifyVolunteersNewTask(
+      ngoId: ngoId,
+      taskId: ref.id,
+      taskTitle: title,
+      excludeUid: adminId,
+    );
+
     return ref.id;
   }
 
@@ -112,6 +125,19 @@ class TaskService {
     await _db.collection('tasks').doc(taskId).update({
       'pendingInvites': FieldValue.arrayUnion(volunteerIds),
     });
+
+    // Send notification to each invited volunteer
+    final taskDoc = await _db.collection('tasks').doc(taskId).get();
+    if (taskDoc.exists) {
+      final taskTitle = taskDoc.data()!['title'] as String? ?? 'a task';
+      await _notifService.sendToMultiple(
+        recipientUids: volunteerIds,
+        title: 'New Task Invitation',
+        body: 'You have been invited to: $taskTitle',
+        type: 'task',
+        taskId: taskId,
+      );
+    }
   }
 
   Future<void> cancelInvite(String taskId, String volunteerId) async {
@@ -420,6 +446,26 @@ class TaskService {
       'status': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
     });
+
+    // Notify admins about the progress submission
+    final taskDoc = await _db.collection('tasks').doc(taskId).get();
+    if (taskDoc.exists) {
+      final ngoId = taskDoc.data()!['ngoId'] as String? ?? '';
+      final volunteerDoc =
+          await _db.collection('users').doc(volunteerId).get();
+      final volunteerName =
+          volunteerDoc.data()?['name'] as String? ?? 'A volunteer';
+
+      if (ngoId.isNotEmpty) {
+        await _notifService.notifyAdminsProgressUpdate(
+          ngoId: ngoId,
+          taskId: taskId,
+          taskTitle: taskTitle,
+          volunteerId: volunteerId,
+          volunteerName: volunteerName,
+        );
+      }
+    }
   }
 
   /// Stream progress requests for a specific volunteer on a task.

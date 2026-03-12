@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/foundation.dart';
 import '../services/auth_service.dart';
+import '../widgets/notification_wrapper.dart';
 import 'auth/login_screen.dart';
 import 'super_admin/super_admin_dashboard.dart';
 import 'admin/admin_dashboard.dart';
@@ -40,26 +41,42 @@ class _RoleRouterState extends State<RoleRouter> {
       }
 
       final profile = await _authService.getUserProfile(firebaseUser.uid);
+      final uid = firebaseUser.uid;
 
       if (!mounted) return;
 
       switch (profile.role) {
         case 'developer_admin':
-          _goTo(const DeveloperAdminDashboard());
+          _goTo(NotificationWrapper(
+            uid: uid,
+            child: const DeveloperAdminDashboard(),
+          ));
           break;
         case 'super_admin':
-          _goTo(const SuperAdminDashboard());
+          _goTo(NotificationWrapper(
+            uid: uid,
+            child: const SuperAdminDashboard(),
+          ));
           break;
         case 'admin':
-          _goTo(const AdminDashboard());
+          _goTo(NotificationWrapper(
+            uid: uid,
+            child: const AdminDashboard(),
+          ));
           break;
         case 'volunteer':
         default:
           // If volunteer has no NGO assigned, show the no-NGO dashboard
           if (profile.ngoId == null || profile.ngoId!.isEmpty) {
-            _goTo(const NoNgoDashboard());
+            _goTo(NotificationWrapper(
+              uid: uid,
+              child: const NoNgoDashboard(),
+            ));
           } else {
-            _goTo(const VolunteerDashboard());
+            _goTo(NotificationWrapper(
+              uid: uid,
+              child: const VolunteerDashboard(),
+            ));
           }
           break;
       }
