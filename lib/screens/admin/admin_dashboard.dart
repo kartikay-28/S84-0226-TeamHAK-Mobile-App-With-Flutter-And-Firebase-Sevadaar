@@ -11,6 +11,7 @@ import '../../services/ngo_service.dart';
 import '../../services/task_service.dart';
 import '../../services/user_service.dart';
 import '../auth/login_screen.dart';
+import '../chat/chat_list_screen.dart';
 import 'create_task_screen.dart';
 import 'task_detail_screen.dart';
 
@@ -131,18 +132,7 @@ class _AdminDashboardState extends State<AdminDashboard>
         extendBody: true,
         body: FadeTransition(
           opacity: _fadeAnim,
-          child: _selectedTab == 0
-              ? _TasksTab(
-                  currentUser: _currentUser,
-                  currentNgo: _currentNgo,
-                  taskService: _taskService,
-                  userService: _userService,
-                )
-              : _RequestsTab(
-                  currentUser: _currentUser,
-                  taskService: _taskService,
-                  userService: _userService,
-                ),
+          child: _buildBody(),
         ),
         bottomNavigationBar: _BottomNav(
           selected: _selectedTab,
@@ -164,7 +154,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 )
               : null,
           onTab: (i) {
-            if (i == 2) {
+            if (i == 3) {
               _confirmSignOut();
               return;
             }
@@ -190,6 +180,27 @@ class _AdminDashboardState extends State<AdminDashboard>
             : null,
       ),
     );
+  }
+
+  Widget _buildBody() {
+    if (_currentUser == null) return const SizedBox.shrink();
+    if (_selectedTab == 0) {
+      return _TasksTab(
+        currentUser: _currentUser,
+        currentNgo: _currentNgo,
+        taskService: _taskService,
+        userService: _userService,
+      );
+    } else if (_selectedTab == 1) {
+      return _RequestsTab(
+        currentUser: _currentUser,
+        taskService: _taskService,
+        userService: _userService,
+      );
+    } else if (_selectedTab == 2) {
+      return ChatListScreen(currentUser: _currentUser!);
+    }
+    return const SizedBox.shrink();
   }
 
   Future<void> _confirmSignOut() async {
@@ -258,10 +269,16 @@ class _BottomNav extends StatelessWidget {
                 badge: pendingBadge,
               ),
               _NavItem(
+                icon: Icons.chat_bubble_outline_rounded,
+                label: 'Messages',
+                selected: selected == 2,
+                onTap: () => onTab(2),
+              ),
+              _NavItem(
                 icon: Icons.logout_rounded,
                 label: 'Sign Out',
                 selected: false,
-                onTap: () => onTab(2),
+                onTap: () => onTab(3),
               ),
             ],
           ),
