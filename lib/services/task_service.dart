@@ -4,6 +4,7 @@ import '../models/task_assignment_model.dart';
 import '../models/progress_request_model.dart';
 import '../models/user_model.dart';
 import 'firestore_notification_service.dart';
+import 'chat_service.dart';
 
 class TaskService {
   FirebaseFirestore? _dbInstance;
@@ -17,6 +18,7 @@ class TaskService {
 
   final FirestoreNotificationService _notifService =
       FirestoreNotificationService();
+  final ChatService _chatService = ChatService();
 
   String _assignmentId(String taskId, String volunteerId) =>
       '${taskId}_$volunteerId';
@@ -54,6 +56,14 @@ class TaskService {
       taskId: ref.id,
       taskTitle: title,
       excludeUid: adminId,
+    );
+
+    // Automatically create a group chat for the task
+    await _chatService.createGroupChat(
+      taskId: ref.id,
+      title: title,
+      ngoId: ngoId,
+      participantIds: [adminId], // Only the admin at creation
     );
 
     return ref.id;
@@ -211,6 +221,10 @@ class TaskService {
     }
 
     await batch.commit();
+
+    // Remove user from the group chat
+    await _chatService.removeUserFromGroupChat(taskId, volunteerId);
+
     await _recalculateMainProgress(taskId);
   }
 
@@ -361,6 +375,10 @@ class TaskService {
         'individualProgress': 0.0,
       }, SetOptions(merge: true));
     });
+
+    // Check if we need to add to chat outside transaction via quick fetch or assume since transaction succeeded
+    // Actually in acceptInvite we add them:
+    await _chatService.addUserToGroupChat(taskId, volunteerId);
   }
 
   /// Volunteer declines an invitation.
@@ -413,6 +431,8 @@ class TaskService {
         'individualProgress': 0.0,
       }, SetOptions(merge: true));
     });
+
+    await _chatService.addUserToGroupChat(taskId, volunteerId);
   }
 
   /// Volunteer dismisses a task they're not interested in.

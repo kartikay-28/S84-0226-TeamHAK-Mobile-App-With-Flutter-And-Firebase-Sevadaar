@@ -10,6 +10,7 @@ import '../../services/auth_service.dart';
 import '../../services/ngo_service.dart';
 import '../../services/task_service.dart';
 import '../auth/login_screen.dart';
+import '../chat/chat_list_screen.dart';
 
 // ─── Design Tokens (matches admin dashboard) ─────────────────────────────────
 class _C {
@@ -187,7 +188,7 @@ class _VolunteerDashboardState extends State<VolunteerDashboard>
                 )
               : null,
           onTab: (i) {
-            if (i == 3) {
+            if (i == 4) {
               _confirmSignOut();
               return;
             }
@@ -216,6 +217,8 @@ class _VolunteerDashboardState extends State<VolunteerDashboard>
           currentUser: _currentUser!,
           taskService: _taskService,
         );
+      case 3:
+        return ChatListScreen(currentUser: _currentUser!);
       default:
         return _TasksTab(
           currentUser: _currentUser!,
@@ -300,10 +303,16 @@ class _BottomNav extends StatelessWidget {
                 badge: ngoTasksBadge,
               ),
               _NavItem(
+                icon: Icons.chat_bubble_outline_rounded,
+                label: 'Messages',
+                selected: selected == 3,
+                onTap: () => onTab(3),
+              ),
+              _NavItem(
                 icon: Icons.logout_rounded,
                 label: 'Sign Out',
                 selected: false,
-                onTap: () => onTab(3),
+                onTap: () => onTab(4),
               ),
             ],
           ),
